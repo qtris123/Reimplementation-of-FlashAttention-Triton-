@@ -47,24 +47,26 @@ class FlashAttention(nn.Module):
         super().__init__()
         self.config = config or AttentionConfig()
 
-    def forward(self, Q: torch.Tensor, K: torch.Tensor, V: torch.Tensor) -> torch.Tensor:
+    def forward(self, Q: torch.Tensor, K: torch.Tensor, V: torch.Tensor, q_pos_offset: int = 0) -> torch.Tensor:
         """
         Compute attention.
 
         Args:
-            Q: (B, H_q, N, D)
-            K: (B, H_kv, N, D)
-            V: (B, H_kv, N, D)
+            Q: (B, H_q, N_q, D) — queries (N_q can be 1 during decode)
+            K: (B, H_kv, N_k, D) — keys (full context with KV cache)
+            V: (B, H_kv, N_k, D) — values
+            q_pos_offset: Absolute position of Q[0] in the full sequence.
+                          For prefill: 0. For decode at step t: t.
 
         Returns:
-            O: (B, H_q, N, D)
+            O: (B, H_q, N_q, D)
         """
         validate_qkv_shapes(Q, K, V, self.config.num_kv_heads)
 
         if self.config.backend == "pytorch":
-            return pytorch_flash_attention_forward(Q, K, V, self.config)
+            return pytorch_flash_attention_forward(Q, K, V, self.config, q_pos_offset=q_pos_offset)
         else:
-            return triton_flash_attention_forward(Q, K, V, self.config)
+            return triton_flash_attention_forward(Q, K, V, self.config, q_pos_offset=q_pos_offset)
 
     def switch_backend(self, backend: str):
         """

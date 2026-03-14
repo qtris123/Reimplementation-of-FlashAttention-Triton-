@@ -72,13 +72,13 @@ def validate_qkv_shapes(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, num_k
     """Validate Q/K/V tensor shapes and raise clear errors."""
     if q.dim() != 4:
         raise ValueError(f"Expected 4-D tensors (B, H, N, D), got Q with {q.dim()} dims")
-    B, H_q, N, D = q.shape
+    B, H_q, N_q, D = q.shape
     _, H_kv, N_k, D_k = k.shape
 
     if k.shape != v.shape:
         raise ValueError(f"K and V shapes must match: K={k.shape}, V={v.shape}")
-    if N != N_k:
-        raise ValueError(f"Q and K sequence lengths must match: Q_seq={N}, K_seq={N_k}")
+    if N_q > N_k:
+        raise ValueError(f"Q seq_len must be <= K seq_len: Q_seq={N_q}, K_seq={N_k}")
     if D != D_k:
         raise ValueError(f"Q and K head dims must match: Q_dim={D}, K_dim={D_k}")
     if B != k.shape[0]:
@@ -98,3 +98,4 @@ def validate_qkv_shapes(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, num_k
             f"Q has {H_q} heads, K has {H_kv} heads. "
             f"Set config.num_kv_heads for GQA."
         )
+

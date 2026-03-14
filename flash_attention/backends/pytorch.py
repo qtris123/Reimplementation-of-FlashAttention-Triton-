@@ -6,6 +6,7 @@ Adapted from problem_1.py. Supports all feature combinations:
   - MHA / GQA
   - Sliding window attention
   - Attention sinks
+  - Prefill (Q_seq == K_seq) and Decode (Q_seq <= K_seq)
 
 This backend is useful for debugging and as a correctness reference.
 It is NOT optimised for speed — use the Triton backend for production.
@@ -23,29 +24,33 @@ def pytorch_flash_attention_forward(
     K: torch.Tensor,
     V: torch.Tensor,
     config: AttentionConfig,
+    q_pos_offset: int = 0,
 ) -> torch.Tensor:
     """
     Tiled FlashAttention-2 forward pass in pure PyTorch.
 
     Args:
-        Q: (B, H_q, N, D)
-        K: (B, H_kv, N, D)
-        V: (B, H_kv, N, D)
+        Q: (B, H_q, N_q, D)
+        K: (B, H_kv, N_k, D)
+        V: (B, H_kv, N_k, D)
         config: AttentionConfig controlling behaviour
+        q_pos_offset: Position offset for Q tokens in the full sequence.
+                      During decode, Q may be 1 token at position `start_pos`.
 
     Returns:
-        O: (B, H_q, N, D) — attention output
+        O: (B, H_q, N_q, D) — attention output
     """
-    B, H_q, N, D = Q.shape
+    B, H_q, N_q, D = Q.shape
     H_kv = K.shape[1]
+    N_k = K.shape[2]
     num_groups = H_q // H_kv  # 1 for MHA, >1 for GQA
 
     Q_TILE = config.block_m
     K_TILE = config.block_n
     scale = compute_softmax_scale(D)
 
-    N_Q_tiles = math.ceil(N / Q_TILE)
-    N_K_tiles = math.ceil(N / K_TILE)
+    N_Q_tiles = math.ceil(N_q / Q_TILE)
+    N_K_tiles = math.ceil(N_k / K_TILE)
 
     O_final = torch.zeros_like(Q, dtype=Q.dtype)
 
@@ -60,7 +65,7 @@ def pytorch_flash_attention_forward(
 
             for i in range(N_Q_tiles):
                 q_start = i * Q_TILE
-                q_end = min((i + 1) * Q_TILE, N)
+                q_end = min((i + 1) * Q_TILE, N_q)
                 Q_tile = Q_bh[q_start:q_end, :]
 
                 # Running accumulators for online softmax
@@ -70,7 +75,7 @@ def pytorch_flash_attention_forward(
 
                 for j in range(N_K_tiles):
                     k_start = j * K_TILE
-                    k_end = min((j + 1) * K_TILE, N)
+                    k_end = min((j + 1) * K_TILE, N_k)
 
                     K_tile = K_bh[k_start:k_end, :]
                     V_tile = V_bh[k_start:k_end, :]
@@ -80,7 +85,8 @@ def pytorch_flash_attention_forward(
 
                     # ---- Masking ----
                     if config.is_causal:
-                        q_idx = torch.arange(q_start, q_end, device=Q.device).unsqueeze(1)
+                        # q_idx: absolute positions in the full sequence
+                        q_idx = torch.arange(q_start, q_end, device=Q.device).unsqueeze(1) + q_pos_offset
                         k_idx = torch.arange(k_start, k_end, device=Q.device).unsqueeze(0)
 
                         # Causal: allow k <= q
@@ -124,3 +130,4 @@ def pytorch_flash_attention_forward(
                 O_final[b, h_q, q_start:q_end, :] = o_i
 
     return O_final.to(Q.dtype)
+
